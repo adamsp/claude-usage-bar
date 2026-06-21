@@ -9,4 +9,4 @@ You can update the refresh cadence by modifying the `REFRESH_INTERVAL_SECONDS` v
 
 # Installation
 
-`./install.sh` will build the binary, generate a plist file so it runs on login, and run the app.
+`./install.sh` will build the binary, generate a plist file so it runs on login, and run the app. **You must be logged in to Claude Code**, as it pulls the auth token from your keychain.
