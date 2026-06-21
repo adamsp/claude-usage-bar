@@ -1,6 +1,8 @@
 import AppKit
 import Foundation
 
+let REFRESH_INTERVAL_SECONDS = 60.0
+
 // MARK: - Models
 
 struct OAuthCredentials: Decodable {
@@ -104,7 +106,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
 
         refresh()
-        Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.refresh() }
+        Timer.scheduledTimer(withTimeInterval: REFRESH_INTERVAL_SECONDS, repeats: true) { [weak self] _ in self?.refresh() }
     }
 
     @objc func refresh() {
