@@ -1,7 +1,8 @@
 import AppKit
 import Foundation
 
-let REFRESH_INTERVAL_SECONDS = 60.0
+// Got rate limited at 2 mins and below. We attempt a refresh whenever the menu opens.
+let REFRESH_INTERVAL_SECONDS = 180.0
 
 // MARK: - Models
 
