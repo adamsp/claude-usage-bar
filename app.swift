@@ -74,11 +74,12 @@ func monoString(_ str: String) -> NSAttributedString {
 
 // MARK: - App Delegate
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
     var sessionItem: NSMenuItem!
     var weeklyItem: NSMenuItem!
     var updatedItem: NSMenuItem!
+    var lastFetched: Date?
 
     func applicationDidFinishLaunching(_: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -95,19 +96,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         updatedItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         updatedItem.isEnabled = false
 
-        let refreshItem = NSMenuItem(title: "Refresh", action: #selector(refresh), keyEquivalent: "r")
-        refreshItem.target = self
-
         let quitItem = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         let menu = NSMenu()
-        for item in [sessionItem!, weeklyItem!, .separator(), updatedItem!, refreshItem, .separator(), quitItem] {
+        for item in [sessionItem!, weeklyItem!, .separator(), updatedItem!, .separator(), quitItem] {
             menu.addItem(item)
         }
+        menu.delegate = self
         statusItem.menu = menu
 
         refresh()
         Timer.scheduledTimer(withTimeInterval: REFRESH_INTERVAL_SECONDS, repeats: true) { [weak self] _ in self?.refresh() }
+    }
+
+    func menuWillOpen(_: NSMenu) {
+        let stale = lastFetched.map { Date().timeIntervalSince($0) > 30 } ?? true
+        if stale { refresh() }
     }
 
     @objc func refresh() {
@@ -122,25 +126,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 let sem = DispatchSemaphore(value: 0)
                 var usage: UsageResponse?
                 var fetchErr: Error?
+                var statusCode = 0
 
-                URLSession.shared.dataTask(with: req) { data, _, err in
+                URLSession.shared.dataTask(with: req) { data, resp, err in
                     defer { sem.signal() }
+                    statusCode = (resp as? HTTPURLResponse)?.statusCode ?? 0
                     if let err { fetchErr = err; return }
                     usage = data.flatMap { try? JSONDecoder().decode(UsageResponse.self, from: $0) }
                 }.resume()
                 sem.wait()
 
                 if let e = fetchErr { throw e }
-                guard let u = usage else {
+                guard statusCode == 200 else {
+                    throw NSError(domain: "ClaudeUsage", code: statusCode,
+                                  userInfo: [NSLocalizedDescriptionKey: "HTTP \(statusCode)"])
+                }
+                // Both period fields are optional, so a non-usage payload (e.g. an error
+                // body) decodes "successfully" with everything nil. Require both 5hr and
+                // 7day utilization values before updating the UI.
+                guard let u = usage, let fhPct = u.fiveHour?.utilization, let sdPct = u.sevenDay?.utilization else {
                     throw NSError(domain: "ClaudeUsage", code: 2,
                                   userInfo: [NSLocalizedDescriptionKey: "Invalid response from server"])
                 }
-
-                let fhPct = u.fiveHour?.utilization ?? 0
-                let sdPct = u.sevenDay?.utilization ?? 0
+                
                 let time  = DateFormatter.localizedString(from: .now, dateStyle: .none, timeStyle: .short)
 
                 DispatchQueue.main.async {
+                    self.lastFetched = .now
                     self.statusItem.button?.title = "\(Int(fhPct))%"
                     self.sessionItem.attributedTitle = monoString(
                         "Session (5h):  \(progressBar(fhPct))  \(Int(fhPct))%  \(resetLabel(u.fiveHour?.resetsAt))"
@@ -151,12 +163,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self.updatedItem.title = "Updated \(time)"
                 }
             } catch {
-                DispatchQueue.main.async {
-                    self.statusItem.button?.title = "err"
-                    self.sessionItem.attributedTitle = monoString("Error: \(error.localizedDescription)")
-                    self.weeklyItem.attributedTitle = monoString("")
-                    self.updatedItem.title = ""
-                }
+                // Leave stale data in place on any failure
             }
         }
     }
