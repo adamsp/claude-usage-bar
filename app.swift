@@ -107,6 +107,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         refresh()
         Timer.scheduledTimer(withTimeInterval: REFRESH_INTERVAL_SECONDS, repeats: true) { [weak self] _ in self?.refresh() }
+
+        // Timers don't fire while asleep and don't reliably resume on wake, so
+        // refresh explicitly when the machine comes back.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(didWake),
+            name: NSWorkspace.didWakeNotification,
+            object: nil
+        )
+    }
+
+    @objc func didWake() {
+        refresh()
     }
 
     func menuWillOpen(_: NSMenu) {
