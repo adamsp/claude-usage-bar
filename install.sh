@@ -24,7 +24,10 @@ cat > "$PLIST" <<EOF
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
     <key>StandardOutPath</key>
     <string>/tmp/claude-usage-bar.log</string>
     <key>StandardErrorPath</key>
