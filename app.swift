@@ -72,6 +72,11 @@ func monoString(_ str: String) -> NSAttributedString {
     ])
 }
 
+func log(_ msg: String) {
+    let stamp = ISO8601DateFormatter().string(from: .now)
+    fputs("[\(stamp)] \(msg)\n", stderr)
+}
+
 // MARK: - App Delegate
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -130,39 +135,55 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func refresh() {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
+
+            let token: String
             do {
-                let token = try getAccessToken()
-                var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
-                req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-                req.timeoutInterval = 10
+                token = try getAccessToken()
+            } catch {
+                log("token: \(error.localizedDescription)")
+                return
+            }
 
-                let sem = DispatchSemaphore(value: 0)
-                var usage: UsageResponse?
-                var fetchErr: Error?
-                var statusCode = 0
+            var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
-                URLSession.shared.dataTask(with: req) { data, resp, err in
-                    defer { sem.signal() }
-                    statusCode = (resp as? HTTPURLResponse)?.statusCode ?? 0
-                    if let err { fetchErr = err; return }
-                    usage = data.flatMap { try? JSONDecoder().decode(UsageResponse.self, from: $0) }
-                }.resume()
-                sem.wait()
+            // A fresh session per request: sleep/wake leaves the shared session's
+            // pooled (HTTP/2) connection dead, and it gets reused for every
+            // subsequent request — so every refresh after wake hangs, including
+            // the one triggered by clicking the menu. An ephemeral session gives
+            // each call its own connection pool. waitsForConnectivity lets a
+            // wake refresh wait for the network to come back, and the resource
+            // timeout caps it so a request can never hang forever.
+            let config = URLSessionConfiguration.ephemeral
+            config.timeoutIntervalForRequest = 10
+            config.timeoutIntervalForResource = 30
+            config.waitsForConnectivity = true
+            let session = URLSession(configuration: config)
 
-                if let e = fetchErr { throw e }
+            session.dataTask(with: req) { data, resp, err in
+                defer { session.finishTasksAndInvalidate() }
+
+                if let err {
+                    log("fetch: \(err.localizedDescription)")
+                    return
+                }
+                let statusCode = (resp as? HTTPURLResponse)?.statusCode ?? 0
                 guard statusCode == 200 else {
-                    throw NSError(domain: "ClaudeUsage", code: statusCode,
-                                  userInfo: [NSLocalizedDescriptionKey: "HTTP \(statusCode)"])
+                    log("HTTP \(statusCode)")
+                    return
                 }
                 // Both period fields are optional, so a non-usage payload (e.g. an error
                 // body) decodes "successfully" with everything nil. Require both 5hr and
                 // 7day utilization values before updating the UI.
-                guard let u = usage, let fhPct = u.fiveHour?.utilization, let sdPct = u.sevenDay?.utilization else {
-                    throw NSError(domain: "ClaudeUsage", code: 2,
-                                  userInfo: [NSLocalizedDescriptionKey: "Invalid response from server"])
+                guard let data,
+                      let u = try? JSONDecoder().decode(UsageResponse.self, from: data),
+                      let fhPct = u.fiveHour?.utilization,
+                      let sdPct = u.sevenDay?.utilization else {
+                    log("invalid response from server")
+                    return
                 }
-                
-                let time  = DateFormatter.localizedString(from: .now, dateStyle: .none, timeStyle: .short)
+
+                let time = DateFormatter.localizedString(from: .now, dateStyle: .none, timeStyle: .short)
 
                 DispatchQueue.main.async {
                     self.lastFetched = .now
@@ -175,9 +196,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     )
                     self.updatedItem.title = "Updated \(time)"
                 }
-            } catch {
-                // Leave stale data in place on any failure
-            }
+            }.resume()
         }
     }
 }
